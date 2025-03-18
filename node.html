@@ -1,0 +1,1565 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Node</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden; /* Empêche le défilement par défaut */
+            background-color: #404040;
+            font-family: Arial, sans-serif;
+        }
+        #viewport {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 20000px; /* Taille large pour permettre le déplacement */
+            height: 20000px;
+            transform: translate(-10000px, -10000px) scale(1); /* Centre initial */
+            transform-origin: 0 0;
+            transition: transform 0s ease; /* Retirer l'effet de lissage */
+        }
+        .rectangle {
+            position: absolute;
+            border: 2px solid rgb(206, 206, 206);
+            background-color: rgba(3, 120, 230, 0.425);
+            cursor: move;
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px;
+            font-size: 14px;
+            color: white;
+            text-shadow: 1px 1px 1px rgba(0,0,0,0.5);
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+        .rectangle:hover {
+            outline: 2px dashed white;
+        }
+        .selected {
+            outline: 2px solid red;
+        }
+        #selection-box {
+            position: absolute;
+            border: 1px dashed #000;
+            background-color: rgba(0, 0, 255, 0.1);
+            pointer-events: none;
+        }
+        /* Menu Contextuel */
+        #context-menu {
+            position: absolute;
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+            padding: 5px;
+            display: none;
+            z-index: 1000; /* Assure que le menu est au-dessus */
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+        }
+        #context-menu button {
+            display: block;
+            width: 200px;
+            padding: 5px 10px;
+            text-align: left;
+            border: none;
+            background: none;
+            cursor: pointer;
+        }
+        #context-menu button:hover {
+            background-color: #e9e9e9;
+        }
+        .label-input {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 90%;
+            text-align: center;
+            background: rgba(255,255,255,0.8);
+            border: none;
+            padding: 2px;
+            font-size: 12px;
+        }
+        .connector {
+            position: absolute;
+            pointer-events: none;
+            z-index: 1000; /* Mettre les connecteurs au-dessus par défaut */
+        }
+    </style>
+</head>
+<body>
+    <div id="viewport">
+        <div id="selection-box"></div>
+        <!-- Le menu contextuel est déplacé en dehors du viewport -->
+    </div>
+    <div id="context-menu">
+        <button id="connect-button">Connecter</button>
+        <button id="delete-button">Effacer</button>
+        <button id="label-button">Ajouter étiquette</button>
+        <button id="calc-button">Rectangle de Calcul</button>
+        <button id="backup-button">Sauvegarder</button>
+        <!--<button id="restore-button">Restaurer</button>-->
+        <button id="clear-all-button">Tout Effacer</button>
+        <!--<button id="export-button">Exporter SVG</button>-->
+        <button id="color-1" style="background-color: #037ef3;">#037ef3</button>
+        <button id="color-2" style="background-color: #f85a40;">#f85a40</button>
+        <button id="color-3" style="background-color: #30c39e;">#30c39e</button>
+        <button id="color-4" style="background-color: #0a8ea0;">#0a8ea0</button>
+        <button id="color-5" style="background-color: #f48924;">#f48924</button>
+        <button id="color-6" style="background-color: #ffc845;">#ffc845</button>
+        <button id="color-7" style="background-color: #52565e;">#52565e</button>
+        <button id="color-8" style="background-color: #caccd1;">#caccd1</button>
+        <button id="color-9" style="background-color: #f3f4f7;">#f3f4f7</button>
+    </div>
+    <script>
+        let rectangles = [];
+        let selectedRectangles = [];
+        let copiedRectangles = [];
+        let isSelecting = false;
+        let selectionStartX, selectionStartY;
+        const gridSize = 50; // Taille de la grille en pixels
+
+        let mouseX = 0;
+        let mouseY = 0;
+
+        let viewport = document.getElementById('viewport');
+        let scale = 1;
+        let translateX = -10000;
+        let translateY = -10000;
+        let isPanning = false;
+        let startPanX, startPanY;
+        let panStartTranslateX, panStartTranslateY;
+
+        let contextMenu = document.getElementById('context-menu');
+
+        document.addEventListener('mousemove', function(e) {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+        });
+
+        function updateTransform() {
+            viewport.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+        }
+
+        function getRectangleArea(rectangle) {
+            return rectangle.offsetWidth * rectangle.offsetHeight;
+        }
+
+        function updateZIndices() {
+            const sortedRectangles = rectangles.slice().sort((a, b) => getRectangleArea(b) - getRectangleArea(a));
+            const baseIndex = 1;
+            const medianArea = 10000; // Seuil de 100x100 pixels pour définir un "grand" rectangle
+            
+            // Séparer les rectangles en deux groupes basés sur leur taille
+            const largeRectangles = sortedRectangles.filter(rect => getRectangleArea(rect) >= medianArea);
+            const smallRectangles = sortedRectangles.filter(rect => getRectangleArea(rect) < medianArea);
+            
+            // Les grands rectangles ont les z-index les plus bas
+            largeRectangles.forEach((rect, index) => {
+                rect.style.zIndex = baseIndex + index;
+            });
+
+            // Connexions au milieu
+            connectors.forEach(connector => {
+                connector.style.zIndex = baseIndex + sortedRectangles.length + 1;
+            });
+
+            // Tous les petits rectangles devant les connexions
+            smallRectangles.forEach((rect, index) => {
+                rect.style.zIndex = baseIndex + sortedRectangles.length + 2 + index;
+            });
+        }
+
+        function createRectangle(x, y, width = gridSize, height = gridSize) {
+            console.log(`Création d'un rectangle à (${x}, ${y})`);
+            
+            const rectangle = document.createElement('div');
+            rectangle.className = 'rectangle';
+            rectangle.style.width = width + 'px';
+            rectangle.style.height = height + 'px';
+            rectangle.style.left = x + 'px';
+            rectangle.style.top = y + 'px';
+            rectangle.style.backgroundColor = '#037ef3'; // Couleur par défaut
+
+            viewport.appendChild(rectangle);
+            rectangles.push(rectangle);
+
+            makeDraggableAndResizable(rectangle);
+            
+            rectangle.addEventListener('dblclick', function(e) {
+                e.stopPropagation();
+                editLabel(rectangle);
+            });
+
+            // Mettre à jour les z-index après la création
+            updateZIndices();
+
+            return rectangle;
+        }
+
+        function makeDraggableAndResizable(element) {
+            let isResizing = false;
+            let isDragging = false;
+            let startX, startY, startWidth, startHeight, startLeft, startTop;
+            let resizeHandle = '';
+
+            element.addEventListener('mousedown', initAction);
+            document.addEventListener('mousemove', doAction);
+            document.addEventListener('mouseup', stopAction);
+
+            function initAction(e) {
+                if (e.button !== 0) return; // Seulement le bouton gauche
+                startX = e.clientX;
+                startY = e.clientY;
+                startWidth = parseInt(document.defaultView.getComputedStyle(element).width, 10);
+                startHeight = parseInt(document.defaultView.getComputedStyle(element).height, 10);
+                startLeft = parseInt(element.style.left, 10);
+                startTop = parseInt(element.style.top, 10);
+
+                const rect = element.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const threshold = 10;
+
+                resizeHandle = '';
+                if (x < threshold) resizeHandle += 'w';
+                if (x > rect.width - threshold) resizeHandle += 'e';
+                if (y < threshold) resizeHandle += 'n';
+                if (y > rect.height - threshold) resizeHandle += 's';
+
+                if (resizeHandle) {
+                    isResizing = true;
+                    element.style.cursor = resizeHandle + '-resize';
+                } else {
+                    isDragging = true;
+                    element.style.cursor = 'move';
+                    if (selectedRectangles.length > 1 && selectedRectangles.includes(element)) {
+                        selectedRectangles.forEach(rect => {
+                            rect.startLeft = parseInt(rect.style.left, 10);
+                            rect.startTop = parseInt(rect.style.top, 10);
+                        });
+                    }
+                }
+
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            function doAction(e) {
+                if (!isResizing && !isDragging) return;
+                e.preventDefault();
+
+                const dx = (e.clientX - startX) / scale;
+                const dy = (e.clientY - startY) / scale;
+
+                if (isResizing) {
+                    if (resizeHandle.includes('e')) {
+                        element.style.width = startWidth + dx + 'px';
+                    }
+                    if (resizeHandle.includes('s')) {
+                        element.style.height = startHeight + dy + 'px';
+                    }
+                    if (resizeHandle.includes('w')) {
+                        const newWidth = startWidth - dx;
+                        element.style.width = newWidth + 'px';
+                        element.style.left = startLeft + startWidth - newWidth + 'px';
+                    }
+                    if (resizeHandle.includes('n')) {
+                        const newHeight = startHeight - dy;
+                        element.style.height = newHeight + 'px';
+                        element.style.top = startTop + startHeight - newHeight + 'px';
+                    }
+
+                    // Mettre à jour les z-index après le redimensionnement
+                    updateZIndices();
+                    // Mettre à jour les connecteurs pendant le redimensionnement
+                    updateConnectors();
+                } else if (isDragging) {
+                    const dx = (e.clientX - startX) / scale;
+                    const dy = (e.clientY - startY) / scale;
+                    
+                    if (selectedRectangles.length > 1 && selectedRectangles.includes(element)) {
+                        selectedRectangles.forEach(rect => {
+                            rect.style.left = rect.startLeft + dx + 'px';
+                            rect.style.top = rect.startTop + dy + 'px';
+                        });
+                    } else {
+                        element.style.left = startLeft + dx + 'px';
+                        element.style.top = startTop + dy + 'px';
+                    }
+
+                    // Mettre à jour les z-index pendant le déplacement si nécessaire
+                    updateZIndices();
+                    updateConnectors();
+                }
+            }
+
+            function stopAction() {
+                isResizing = false;
+                isDragging = false;
+                resizeHandle = '';
+                element.style.cursor = 'move';
+            }
+        }
+
+        function toggleRectangleSelection(rectangle, event) {
+            if (event.ctrlKey) {
+                if (selectedRectangles.includes(rectangle)) {
+                    rectangle.classList.remove('selected');
+                    selectedRectangles = selectedRectangles.filter(r => r !== rectangle);
+                } else {
+                    rectangle.classList.add('selected');
+                    selectedRectangles.push(rectangle);
+                }
+            } else {
+                selectedRectangles.forEach(r => r.classList.remove('selected'));
+                selectedRectangles = [rectangle];
+                rectangle.classList.add('selected');
+            }
+        }
+
+        function startSelection(e) {
+            if (e.target === viewport) {
+                isSelecting = true;
+                selectionStartX = (e.clientX - translateX) / scale;
+                selectionStartY = (e.clientY - translateY) / scale;
+                updateSelectionBox(e);
+            }
+        }
+
+        function updateSelection(e) {
+            if (isSelecting) {
+                updateSelectionBox(e);
+                selectRectanglesInBox();
+            }
+        }
+
+        function endSelection() {
+            isSelecting = false;
+            document.getElementById('selection-box').style.display = 'none';
+        }
+
+        function updateSelectionBox(e) {
+            const selectionBox = document.getElementById('selection-box');
+            const currentX = (e.clientX - translateX) / scale;
+            const currentY = (e.clientY - translateY) / scale;
+            const left = Math.min(selectionStartX, currentX);
+            const top = Math.min(selectionStartY, currentY);
+            const width = Math.abs(currentX - selectionStartX);
+            const height = Math.abs(currentY - selectionStartY);
+
+            selectionBox.style.left = left + 'px';
+            selectionBox.style.top = top + 'px';
+            selectionBox.style.width = width + 'px';
+            selectionBox.style.height = height + 'px';
+            selectionBox.style.display = 'block';
+        }
+
+        function selectRectanglesInBox() {
+            const selectionBox = document.getElementById('selection-box').getBoundingClientRect();
+            rectangles.forEach(rectangle => {
+                const rectBox = rectangle.getBoundingClientRect();
+                if (
+                    rectBox.left < selectionBox.right &&
+                    rectBox.right > selectionBox.left &&
+                    rectBox.top < selectionBox.bottom &&
+                    rectBox.bottom > selectionBox.top
+                ) {
+                    if (!selectedRectangles.includes(rectangle)) {
+                        rectangle.classList.add('selected');
+                        selectedRectangles.push(rectangle);
+                    }
+                } else {
+                    rectangle.classList.remove('selected');
+                    selectedRectangles = selectedRectangles.filter(r => r !== rectangle);
+                }
+            });
+        }
+
+        function showContextMenu(e) {
+            e.preventDefault();
+            contextMenu.style.display = 'block';
+            
+            // Calculer la nouvelle position
+            let x = e.pageX + 70; // Ajouter un décalage de 10px vers la droite
+            let y = e.pageY - 180; // Soustraire 10px pour le déplacer vers le haut
+
+            // Vérifier si le menu dépasse la fenêtre à droite
+            const menuWidth = contextMenu.offsetWidth;
+            const windowWidth = window.innerWidth;
+            if (x + menuWidth > windowWidth) {
+                x = windowWidth - menuWidth - 5; // 5px de marge
+            }
+
+            // Vérifier si le menu dépasse la fenêtre en haut
+            const menuHeight = contextMenu.offsetHeight;
+            if (y < 0) {
+                y = 5; // 5px de marge du haut
+            }
+
+            // Appliquer la nouvelle position
+            contextMenu.style.left = x + 'px';
+            contextMenu.style.top = y + 'px';
+        }
+
+        function hideContextMenu() {
+            contextMenu.style.display = 'none';
+        }
+
+        function deleteSelectedRectangles() {
+            selectedRectangles.forEach(rectangle => {
+                // Supprimer les connecteurs associés
+                connectors = connectors.filter(connector => {
+                    if (connector.rect1 === rectangle || connector.rect2 === rectangle) {
+                        if (connector.parentNode === viewport) {
+                            viewport.removeChild(connector);
+                        }
+                        return false;
+                    }
+                    return true;
+                });
+                
+                // Supprimer le rectangle s'il est toujours dans le viewport
+                if (rectangle.parentNode === viewport) {
+                    viewport.removeChild(rectangle);
+                }
+                rectangles = rectangles.filter(r => r !== rectangle);
+            });
+            selectedRectangles = [];
+            hideContextMenu();
+            saveRectangles();
+            updateZIndices();
+        }
+
+        function evaluateExpression(expression, rectangle) {
+            try {
+                if (!expression || expression.trim() === '') return 0;
+                if (!isNaN(expression) && expression.trim() !== '') return parseFloat(expression);
+
+                // Trouver les rectangles connectés et leurs valeurs
+                const values = new Map();
+                connectors.forEach(conn => {
+                    let sourceRect, targetRect;
+                    if (conn.rect1 === rectangle) {
+                        sourceRect = conn.rect2;
+                        targetRect = rectangle;
+                    } else if (conn.rect2 === rectangle) {
+                        sourceRect = conn.rect1;
+                        targetRect = rectangle;
+                    }
+                    
+                    if (sourceRect) {
+                        const content = sourceRect.textContent.trim();
+                        let value = 0;
+                        if (content.includes('=')) {
+                            value = parseFloat(content.split('=')[1].trim()) || 0;
+                        } else {
+                            value = parseFloat(content) || 0;
+                        }
+                        values.set(sourceRect, value);
+                    }
+                });
+
+                // Remplacer les références dans l'ordre
+                let currentExpression = expression;
+                let index = 1;
+                for (const [rect, value] of values) {
+                    const regex = new RegExp('\\$' + index, 'g');
+                    currentExpression = currentExpression.replace(regex, value.toString());
+                    index++;
+                }
+
+                // Si toutes les références sont remplacées, évaluer
+                if (!currentExpression.includes('$')) {
+                    const result = Function('return ' + currentExpression)();
+                    return Number(result.toFixed(2));
+                }
+
+                // Si des références restent non résolues, retourner 0
+                return 0;
+
+            } catch (error) {
+                console.error('Erreur dans evaluateExpression:', error);
+                return 0;
+            }
+        }
+
+        // Modifier updateCalculations pour faire plusieurs passes
+        function updateCalculations() {
+            const maxPasses = 5; // Nombre maximum de passes pour éviter les boucles infinies
+            let changed = true;
+            let passes = 0;
+            
+            while (changed && passes < maxPasses) {
+                changed = false;
+                passes++;
+                
+                rectangles.forEach(rectangle => {
+                    if (rectangle.dataset.type === 'calc') {
+                        const expression = rectangle.textContent.split('=')[0].trim();
+                        const oldValue = parseFloat(rectangle.textContent.split('=')[1]?.trim() || '0');
+                        const newValue = evaluateExpression(expression, rectangle);
+                        
+                        if (Math.abs(oldValue - newValue) > 0.001) { // Seuil de changement significatif
+                            rectangle.textContent = `${expression} = ${newValue.toFixed(2)}`;
+                            changed = true;
+                        }
+                    }
+                });
+            }
+        }
+
+        // Modifier la fonction editLabel pour les rectangles de calcul
+        function editLabel(rectangle) {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'label-input';
+            
+            // Récupérer l'expression existante sans le résultat
+            let currentText = rectangle.textContent;
+            if (rectangle.dataset.type === 'calc' && currentText.includes('=')) {
+                currentText = currentText.split('=')[0].trim();
+            }
+            input.value = currentText;
+            
+            const handleCalculation = function() {
+                let newValue = input.value.trim();
+                if (rectangle.dataset.type === 'calc') {
+                    const result = evaluateExpression(newValue, rectangle);
+                    rectangle.textContent = `${newValue} = ${result}`;
+                    updateCalculations(); // Mettre à jour tous les calculs après modification
+                } else {
+                    rectangle.textContent = newValue;
+                    updateCalculations(); // Mettre à jour car la valeur peut être utilisée ailleurs
+                }
+                input.remove();
+                saveRectangles();
+            };
+
+            // Vider le rectangle avant d'ajouter l'input
+            rectangle.textContent = '';
+            
+            input.addEventListener('blur', handleCalculation);
+            input.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    handleCalculation();
+                }
+            });
+
+            rectangle.appendChild(input);
+            input.focus();
+        }
+
+        // Fonction pour changer la couleur du rectangle
+        function changeRectangleColor(color) {
+            selectedRectangles.forEach(rectangle => {
+                rectangle.style.backgroundColor = color;
+            });
+            saveRectangles();
+            updateZIndices(); // Mettre à jour les z-index après changement de couleur
+        }
+
+        // Gestion du zoom avec la molette
+        document.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            const zoomIntensity = 0.001;
+            const delta = e.deltaY;
+            const zoom = 1 - delta * zoomIntensity;
+
+            const mouseXRelative = (e.clientX - translateX) / scale;
+            const mouseYRelative = (e.clientY - translateY) / scale;
+
+            scale *= zoom;
+            scale = Math.min(Math.max(0.1, scale), 5); // Limiter le zoom entre 0.1 et 5
+
+            translateX = e.clientX - mouseXRelative * scale;
+            translateY = e.clientY - mouseYRelative * scale;
+
+            updateTransform();
+        }, { passive: false });
+
+        // Remplacer la gestion du panning avec le bouton droit par ceci :
+        let isDraggingCanvas = false;
+        let lastMouseX, lastMouseY;
+        document.addEventListener('mousedown', function(e) {
+            if (e.button === 1) { // Middle mouse button
+                isDraggingCanvas = true;
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+                e.preventDefault(); // Empêche les comportements par défaut
+            }
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (isDraggingCanvas) {
+                let deltaX = e.clientX - lastMouseX;
+                let deltaY = e.clientY - lastMouseY;
+                translateX += deltaX;
+                translateY += deltaY;
+                updateTransform();
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+                e.preventDefault(); // Empêche les comportements par défaut
+            }
+        });
+
+        document.addEventListener('mouseup', function(e) {
+            if (e.button === 1) { // Middle mouse button
+                isDraggingCanvas = false;
+            }
+        });
+
+        // Ajouter cet écouteur pour gérer le cas où l'utilisateur relâche Shift pendant le panning
+        document.addEventListener('keyup', function(e) {
+            if (e.key === 'Shift' && isDraggingCanvas) {
+                isDraggingCanvas = false;
+            }
+        });
+
+        // Sélection et création de rectangles dans le viewport
+        viewport.addEventListener('mousedown', startSelection);
+        viewport.addEventListener('mousemove', updateSelection);
+        viewport.addEventListener('mouseup', endSelection);
+
+        viewport.addEventListener('click', function(e) {
+            if (e.target.classList.contains('rectangle')) {
+                toggleRectangleSelection(e.target, e);
+            } 
+            hideContextMenu();
+        });
+
+        // Gestion du menu contextuel
+        viewport.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+            if (e.target === viewport) {
+                const x = (e.clientX - translateX) / scale;
+                const y = (e.clientY - translateY) / scale;
+                createRectangle(x, y);
+            } else if (e.target.classList.contains('rectangle')) {
+                showContextMenu(e);
+            }
+        });
+
+        // Cacher le menu contextuel en cliquant ailleurs
+        document.addEventListener('click', function(e) {
+            if (!contextMenu.contains(e.target)) {
+                hideContextMenu();
+            }
+        });
+
+        // Actions du menu contextuel
+        document.getElementById('delete-button').addEventListener('click', deleteSelectedRectangles);
+        document.getElementById('label-button').addEventListener('click', function() {
+            if (selectedRectangles.length === 1) {
+                editLabel(selectedRectangles[0]);
+            }
+            hideContextMenu();
+        });
+        document.getElementById('backup-button').addEventListener('click', backupRectangles);
+        document.getElementById('clear-all-button').addEventListener('click', clearAllRectangles); // Écouteur ajouté
+
+        document.querySelectorAll('#context-menu button[id^="color-"]').forEach(button => {
+            button.addEventListener('click', function() {
+                changeRectangleColor(this.style.backgroundColor);
+            });
+        });
+
+        console.log('Script chargé et prêt à créer des rectangles');
+
+        const STORAGE_KEY = 'rectanglesData'; // Clé unique pour le stockage
+
+        let isLoading = false;
+        let lastSavedState = '';  // Pour éviter les sauvegardes redondantes
+
+        function saveRectangles() {
+            if (isLoading) {
+                console.log('Skip save: loading in progress');
+                return;
+            }
+
+            const connectorsData = connectors.map(connector => ({
+                rect1Index: rectangles.indexOf(connector.rect1),
+                rect2Index: rectangles.indexOf(connector.rect2)
+            }));
+            
+            const data = {
+                rectangles: rectangles.map(rectangle => ({
+                    width: rectangle.offsetWidth,
+                    height: rectangle.offsetHeight,
+                    left: rectangle.offsetLeft,
+                    top: rectangle.offsetTop,
+                    label: rectangle.textContent,
+                    color: rectangle.style.backgroundColor,
+                    type: rectangle.dataset.type // Ajout du type
+                })),
+                connectors: connectorsData
+            };
+            
+            const currentState = JSON.stringify(data);
+            if (currentState === lastSavedState) {
+                console.log('Skip save: no changes');
+                return;
+            }
+
+            console.log('Saving new state');
+            lastSavedState = currentState;
+            localStorage.setItem(STORAGE_KEY, currentState);
+        }
+
+        function loadRectangles() {
+            isLoading = true;
+            console.log('Starting load');
+            try {
+                const data = JSON.parse(localStorage.getItem(STORAGE_KEY));
+                if (!data) {
+                    console.log('No data to load');
+                    return;
+                }
+
+                // Nettoyer l'état actuel
+                rectangles.forEach(rect => {
+                    if (rect && rect.parentNode === viewport) {
+                        viewport.removeChild(rect);
+                    }
+                });
+                connectors.forEach(conn => {
+                    if (conn && conn.parentNode === viewport) {
+                        viewport.removeChild(conn);
+                    }
+                });
+                rectangles = [];
+                connectors = [];
+                
+                // Créer les nouveaux rectangles
+                const newRectangles = data.rectangles.map(rectData => {
+                    let rectangle;
+                    if (rectData.type === 'calc') {
+                        rectangle = createCalcRectangle(rectData.left, rectData.top);
+                    } else {
+                        rectangle = createRectangle(
+                            rectData.left,
+                            rectData.top,
+                            rectData.width,
+                            rectData.height
+                        );
+                    }
+                    rectangle.textContent = rectData.label;
+                    rectangle.style.backgroundColor = rectData.color;
+                    return rectangle;
+                });
+                
+                // Restaurer les connexions
+                if (data.connectors) {
+                    data.connectors.forEach(conn => {
+                        const rect1 = newRectangles[conn.rect1Index];
+                        const rect2 = newRectangles[conn.rect2Index];
+                        if (rect1 && rect2) {
+                            createConnector(rect1, rect2);
+                        }
+                    });
+                }
+                
+                updateZIndices();
+                updateConnectors();
+                
+                // Mettre à jour lastSavedState pour éviter une sauvegarde immédiate
+                lastSavedState = JSON.stringify(data);
+                
+            } catch (error) {
+                console.error('Error loading rectangles:', error);
+            } finally {
+                console.log('Finished loading');
+                isLoading = false;
+            }
+        }
+
+        // Appeler loadRectangles lors du chargement de la page
+        window.onload = function() {
+            loadRectangles();
+        };
+
+        // Appeler saveRectangles après chaque modification
+        document.addEventListener('mouseup', function(e) {
+            if (!isLoading) {
+                requestAnimationFrame(() => saveRectangles());
+            }
+        });
+
+        function backupRectangles() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.style.display = 'none';
+            input.accept = '.json';
+            document.body.appendChild(input);
+
+            const rectanglesToSave = selectedRectangles.length > 0 ? selectedRectangles : rectangles;
+            const rectangleIndexMap = new Map();
+
+            const data = {
+                rectangles: rectanglesToSave.map((rectangle, index) => {
+                    rectangleIndexMap.set(rectangle, index);
+                    return {
+                        width: rectangle.offsetWidth,
+                        height: rectangle.offsetHeight,
+                        left: rectangle.offsetLeft,
+                        top: rectangle.offsetTop,
+                        label: rectangle.textContent,
+                        color: rectangle.style.backgroundColor,
+                        type: rectangle.dataset.type
+                    };
+                }),
+                connections: connectors
+                    .filter(conn => 
+                        // Si on sauvegarde une sélection, ne garder que les connexions entre rectangles sélectionnés
+                        selectedRectangles.length === 0 || 
+                        (selectedRectangles.includes(conn.rect1) && selectedRectangles.includes(conn.rect2))
+                    )
+                    .map(connector => ({
+                        fromIndex: rectangleIndexMap.get(connector.rect1),
+                        toIndex: rectangleIndexMap.get(connector.rect2)
+                    }))
+            };
+
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'rectangles_backup_' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            document.body.removeChild(input);
+        }
+
+        function restoreRectangles(event) {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = e => {
+                const file = e.target.files[0];
+                const reader = new FileReader();
+                reader.onload = event => {
+                    isLoading = true;
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        
+                        // Nettoyer le canvas actuel
+                        rectangles.forEach(rect => rect.remove());
+                        connectors.forEach(conn => conn.path.remove());
+                        rectangles = [];
+                        connectors = [];
+                        
+                        // Créer les nouveaux rectangles
+                        const newRectangles = new Map();
+                        data.rectangles.forEach((rectData, index) => {
+                            let rectangle;
+                            if (rectData.type === 'calc') {
+                                rectangle = createCalcRectangle(rectData.left, rectData.top);
+                            } else {
+                                rectangle = createRectangle(rectData.left, rectData.top, rectData.width, rectData.height);
+                            }
+                            
+                            rectangle.textContent = rectData.label;
+                            rectangle.style.backgroundColor = rectData.color;
+                            rectangle.dataset.type = rectData.type;
+                            newRectangles.set(index, rectangle);
+                        });
+                        
+                        // Restaurer les connexions
+                        if (data.connections) {
+                            data.connections.forEach(conn => {
+                                const rect1 = newRectangles.get(conn.fromIndex);
+                                const rect2 = newRectangles.get(conn.toIndex);
+                                if (rect1 && rect2) {
+                                    createConnector(rect1, rect2);
+                                }
+                            });
+                        }
+                        
+                        // Sauvegarder dans le localStorage
+                        saveRectangles();
+                        
+                        updateZIndices();
+                        updateConnectors();
+                        
+                    } catch (error) {
+                        console.error('Erreur lors de la restoration:', error);
+                    } finally {
+                        isLoading = false;
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        }
+
+        // Ajouter l'écouteur d'événements pour le drag and drop
+        document.addEventListener('dragover', function(e) {
+            e.preventDefault();
+        });
+
+        document.addEventListener('drop', function(e) {
+            e.preventDefault();
+            const file = e.dataTransfer.files[0];
+            if (file && file.type === 'application/json') {
+                const reader = new FileReader();
+                reader.onload = event => {
+                    isLoading = true;
+                    console.log('Starting drop operation');
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        
+                        const dropX = (e.clientX - translateX) / scale;
+                        const dropY = (e.clientY - translateY) / scale;
+                        
+                        // Calculer le centre du groupe de rectangles d'origine
+                        const minX = Math.min(...data.rectangles.map(r => r.left));
+                        const maxX = Math.max(...data.rectangles.map(r => r.left + r.width));
+                        const minY = Math.min(...data.rectangles.map(r => r.top));
+                        const maxY = Math.max(...data.rectangles.map(r => r.top + r.height));
+                        
+                        const groupWidth = maxX - minX;
+                        const groupHeight = maxY - minY;
+                        const groupCenterX = minX + groupWidth / 2;
+                        const groupCenterY = minY + groupHeight / 2;
+                        
+                        const newRectangles = new Map();
+                        const startIndex = rectangles.length;
+                        
+                        // Créer les nouveaux rectangles
+                        data.rectangles.forEach((rect, index) => {
+                            const relativeX = rect.left - groupCenterX;
+                            const relativeY = rect.top - groupCenterY;
+                            
+                            const newX = dropX + relativeX;
+                            const newY = dropY + relativeY;
+                            
+                            let newRect;
+                            if (rect.type === 'calc') {
+                                console.log('Création d\'un rectangle de calcul par drop');
+                                newRect = createCalcRectangle(newX, newY);
+                            } else {
+                                console.log('Création d\'un rectangle normal par drop');
+                                newRect = createRectangle(newX, newY, rect.width, rect.height);
+                            }
+                            
+                            newRect.textContent = rect.label;
+                            newRect.style.backgroundColor = rect.color;
+                            newRect.dataset.type = rect.type;
+                            
+                            console.log('Nouveau rectangle créé par drop:', {
+                                type: newRect.dataset.type,
+                                text: newRect.textContent,
+                                position: { x: newX, y: newY }
+                            });
+                            
+                            newRectangles.set(index, newRect);
+                        });
+                        
+                        // Restaurer les connexions du fichier déposé
+                        if (data.connections) {
+                            data.connections.forEach(conn => {
+                                const rect1 = newRectangles.get(conn.fromIndex);
+                                const rect2 = newRectangles.get(conn.toIndex);
+                                if (rect1 && rect2) {
+                                    createConnector(rect1, rect2);
+                                }
+                            });
+                        }
+                        
+                        updateZIndices();
+                        updateConnectors();
+                        
+                    } catch (error) {
+                        console.error('Error during drop:', error);
+                    } finally {
+                        console.log('Finished drop operation');
+                        isLoading = false;
+                        saveRectangles();
+                    }
+                };
+                reader.readAsText(file);
+            } else {
+                alert('Veuillez déposer un fichier JSON valide.');
+            }
+        });
+
+        // Modifier la gestion des raccourcis clavier pour copier et coller
+        document.addEventListener('keydown', function(e) {
+            // Vérifier si c'est Ctrl+C ou Cmd+C (Mac)
+            if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selectedRectangles.length > 0) {
+                e.preventDefault(); // Empêcher le comportement par défaut
+                copyRectangles();
+            }
+            // Vérifier si c'est Ctrl+V ou Cmd+V (Mac)
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+                e.preventDefault(); // Empêcher le comportement par défaut
+                pasteRectangles();
+            }
+            // Vérifier si c'est la touche Suppr ou Backspace
+            if ((e.key === 'Delete' || e.key === 'Backspace') && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) && selectedRectangles.length > 0) {
+                e.preventDefault();
+                deleteSelectedRectangles();
+            }
+            // Vérifier si c'est la touche 'm' ou 'M'
+            if ((e.key === 'm' || e.key === 'M') && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+                e.preventDefault();
+                toggleMenu();
+            }
+        });
+
+        function copyRectangles() {
+            if (selectedRectangles.length === 0) return;
+
+            const firstRect = selectedRectangles[0];
+            const selectedIndexMap = new Map(selectedRectangles.map((rect, index) => [rect, index]));
+            
+            copiedRectangles = {
+                rectangles: selectedRectangles.map(rectangle => ({
+                    width: rectangle.offsetWidth,
+                    height: rectangle.offsetHeight,
+                    relativeX: rectangle.offsetLeft - firstRect.offsetLeft,
+                    relativeY: rectangle.offsetTop - firstRect.offsetTop,
+                    label: rectangle.textContent,
+                    color: rectangle.style.backgroundColor,
+                    type: rectangle.dataset.type || 'normal'
+                })),
+                connections: connectors.filter(conn => 
+                    selectedRectangles.includes(conn.rect1) && selectedRectangles.includes(conn.rect2)
+                ).map(conn => ({
+                    fromIndex: selectedIndexMap.get(conn.rect1),
+                    toIndex: selectedIndexMap.get(conn.rect2)
+                }))
+            };
+
+            console.log('Rectangles et connexions copiés:', copiedRectangles);
+        }
+
+        function pasteRectangles() {
+            if (!copiedRectangles.rectangles || copiedRectangles.rectangles.length === 0) {
+                console.log('Rien à coller');
+                return;
+            }
+
+            // Utiliser la position actuelle de la souris pour le collage
+            const pasteX = (mouseX - translateX) / scale;
+            const pasteY = (mouseY - translateY) / scale;
+
+            // Calculer le centre du groupe de rectangles d'origine
+            const minX = Math.min(...copiedRectangles.rectangles.map(r => r.relativeX));
+            const maxX = Math.max(...copiedRectangles.rectangles.map(r => r.relativeX + r.width));
+            const minY = Math.min(...copiedRectangles.rectangles.map(r => r.relativeY));
+            const maxY = Math.max(...copiedRectangles.rectangles.map(r => r.relativeY + r.height));
+
+            const groupWidth = maxX - minX;
+            const groupHeight = maxY - minY;
+            const groupCenterX = minX + groupWidth / 2;
+            const groupCenterY = minY + groupHeight / 2;
+
+            const newRectangles = copiedRectangles.rectangles.map((rectData, index) => {
+                const relativeX = rectData.relativeX - groupCenterX;
+                const relativeY = rectData.relativeY - groupCenterY;
+
+                const newX = pasteX + relativeX;
+                const newY = pasteY + relativeY;
+
+                let newRect;
+                if (rectData.type === 'calc') {
+                    newRect = createCalcRectangle(newX, newY);
+                } else {
+                    newRect = createRectangle(newX, newY, rectData.width, rectData.height);
+                }
+
+                newRect.textContent = rectData.label;
+                newRect.style.backgroundColor = rectData.color;
+                newRect.dataset.type = rectData.type;
+
+                return newRect;
+            });
+
+            // Recréer les connexions
+            copiedRectangles.connections.forEach(conn => {
+                const rect1 = newRectangles[conn.fromIndex];
+                const rect2 = newRectangles[conn.toIndex];
+                if (rect1 && rect2) {
+                    createConnector(rect1, rect2);
+                }
+            });
+
+            saveRectangles();
+            updateZIndices();
+            updateConnectors();
+            updateCalculations();
+            console.log('Rectangles et connexions collés');
+        }
+
+        // Fonction pour tout effacer avec confirmation
+        function clearAllRectangles() {
+            if (confirm('Êtes-vous sûr de vouloir tout effacer ? Cette action est irréversible.')) {
+                // Supprimer tous les connecteurs du DOM et du tableau
+                connectors.forEach(connector => {
+                    if (connector && connector.parentNode === viewport) {
+                        viewport.removeChild(connector);
+                    }
+                });
+                connectors = [];
+
+                // Supprimer tous les rectangles du DOM et du tableau
+                rectangles.forEach(rectangle => {
+                    if (rectangle && rectangle.parentNode === viewport) {
+                        viewport.removeChild(rectangle);
+                    }
+                });
+                rectangles = [];
+                
+                // Réinitialiser les rectangles sélectionnés
+                selectedRectangles = [];
+                
+                // Masquer le menu contextuel
+                hideContextMenu();
+                
+                // Sauvegarder l'état vide
+                lastSavedState = JSON.stringify({ rectangles: [], connectors: [] });
+                localStorage.setItem(STORAGE_KEY, lastSavedState);
+                
+                console.log('Tous les rectangles et connexions ont été effacés.');
+            }
+        }
+
+        // Ajoutez cet écouteur d'événements après les autres écouteurs de clavier
+        document.addEventListener('keydown', function(e) {
+            // Vérifiez si la touche pressée est Delete uniquement
+            if (e.key === 'Delete' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) && selectedRectangles.length > 0) {
+                e.preventDefault();
+                deleteSelectedRectangles();
+            }
+        });
+
+        // Ajouter ces nouvelles fonctions
+        function createConnector(rect1, rect2) {
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.classList.add('connector');
+            svg.style.position = 'absolute';
+            svg.style.top = '0';
+            svg.style.left = '0';
+            svg.style.width = '100%';
+            svg.style.height = '100%';
+            svg.style.pointerEvents = 'none'; // Changer à 'none' pour ne pas interférer
+            svg.style.zIndex = '1000'; // Ajouter z-index
+            
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute('stroke', '#d4d4d4');
+            path.setAttribute('stroke-width', '4');
+            path.setAttribute('stroke-dasharray', '10,10');
+            path.setAttribute('fill', 'none');
+            path.style.pointerEvents = 'auto'; // Garder 'auto' uniquement pour le path
+            path.style.cursor = 'pointer';
+            
+            // Ajouter les écouteurs d'événements pour la suppression
+            path.addEventListener('contextmenu', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (confirm('Voulez-vous supprimer cette connexion ?')) {
+                    deleteConnector(svg);
+                }
+            });
+
+            // Ajouter un effet de survol
+            path.addEventListener('mouseover', function() {
+                path.setAttribute('stroke', '#ff0000');
+                path.setAttribute('stroke-width', '6');
+            });
+
+            path.addEventListener('mouseout', function() {
+                path.setAttribute('stroke', '#d4d4d4');
+                path.setAttribute('stroke-width', '4');
+            });
+            
+            svg.appendChild(path);
+            viewport.appendChild(svg); // Ajouter les connecteurs après les rectangles
+            
+            updateConnectorPath(path, rect1, rect2);
+            
+            svg.rect1 = rect1;
+            svg.rect2 = rect2;
+            
+            if (!connectors.includes(svg)) {
+                connectors.push(svg);
+            }
+            
+            updateCalculations();
+            return svg;
+        }
+
+        function updateConnectorPath(path, rect1, rect2) {
+            // Obtenir les centres des rectangles
+            const x1 = parseInt(rect1.style.left) + rect1.offsetWidth / 2;
+            const y1 = parseInt(rect1.style.top) + rect1.offsetHeight / 2;
+            const x2 = parseInt(rect2.style.left) + rect2.offsetWidth / 2;
+            const y2 = parseInt(rect2.style.top) + rect2.offsetHeight / 2;
+            
+            // Calculer les dimensions des rectangles
+            const w1 = rect1.offsetWidth / 2;
+            const h1 = rect1.offsetHeight / 2;
+            const w2 = rect2.offsetWidth / 2;
+            const h2 = rect2.offsetHeight / 2;
+            
+            // Déterminer les points de sortie et les points de contrôle
+            let startPoint, endPoint, control1, control2;
+            
+            // Calculer l'angle entre les deux rectangles
+            const angle = Math.atan2(y2 - y1, x2 - x1);
+            
+            // Déterminer les points de sortie en fonction de l'angle
+            if (Math.abs(Math.cos(angle)) > Math.abs(Math.sin(angle))) {
+                // Sortie horizontale
+                const sign1 = x2 > x1 ? 1 : -1;
+                const sign2 = x2 > x1 ? -1 : 1;
+                startPoint = {
+                    x: x1 + sign1 * w1,
+                    y: y1
+                };
+                endPoint = {
+                    x: x2 + sign2 * w2,
+                    y: y2
+                };
+                // Points de contrôle à distance fixe pour une sortie perpendiculaire
+                const controlDistance = Math.min(100, Math.abs(x2 - x1) / 3);
+                control1 = {
+                    x: startPoint.x + sign1 * controlDistance,
+                    y: startPoint.y
+                };
+                control2 = {
+                    x: endPoint.x + sign2 * controlDistance,
+                    y: endPoint.y
+                };
+            } else {
+                // Sortie verticale
+                const sign1 = y2 > y1 ? 1 : -1;
+                const sign2 = y2 > y1 ? -1 : 1;
+                startPoint = {
+                    x: x1,
+                    y: y1 + sign1 * h1
+                };
+                endPoint = {
+                    x: x2,
+                    y: y2 + sign2 * h2
+                };
+                // Points de contrôle à distance fixe pour une sortie perpendiculaire
+                const controlDistance = Math.min(100, Math.abs(y2 - y1) / 3);
+                control1 = {
+                    x: startPoint.x,
+                    y: startPoint.y + sign1 * controlDistance
+                };
+                control2 = {
+                    x: endPoint.x,
+                    y: endPoint.y + sign2 * controlDistance
+                };
+            }
+            
+            // Créer le chemin avec une courbe de Bézier cubique
+            const d = `M ${startPoint.x} ${startPoint.y} ` +
+                      `C ${control1.x} ${control1.y}, ` +
+                      `${control2.x} ${control2.y}, ` +
+                      `${endPoint.x} ${endPoint.y}`;
+            
+            path.setAttribute('d', d);
+        }
+
+        // Ajouter ces variables globales au début du script
+        let connectors = [];
+
+        // Ajouter l'écouteur pour le bouton de connexion
+        document.getElementById('connect-button').addEventListener('click', function() {
+            if (selectedRectangles.length === 2) {
+                if (!connectionExists(selectedRectangles[0], selectedRectangles[1])) {
+                    const connector = createConnector(selectedRectangles[0], selectedRectangles[1]);
+                    updateCalculations();
+                    saveRectangles();
+                }
+                hideContextMenu();
+            } else {
+                alert('Veuillez sélectionner exactement deux rectangles à connecter.');
+            }
+        });
+
+        // Modifier la fonction de déplacement des rectangles pour mettre à jour les connecteurs
+        function updateConnectors() {
+            connectors.forEach(connector => {
+                const path = connector.querySelector('path');
+                updateConnectorPath(path, connector.rect1, connector.rect2);
+            });
+        }
+
+        // Ajouter cette nouvelle fonction
+        function createCalcRectangle(x, y) {
+            const width = gridSize * 3;
+            const height = gridSize;
+            const rectangle = createRectangle(x, y, width, height);
+            rectangle.dataset.type = 'calc'; // S'assurer que le type est défini
+            rectangle.style.backgroundColor = '#f48924';
+            rectangle.textContent = '=';
+            console.log('Rectangle de calcul créé avec type:', rectangle.dataset.type);
+            return rectangle;
+        }
+
+        // Ajouter l'écouteur pour le bouton de calcul
+        document.getElementById('calc-button').addEventListener('click', function() {
+            const x = (mouseX - translateX) / scale;
+            const y = (mouseY - translateY) / scale;
+            createCalcRectangle(x, y);
+            hideContextMenu();
+            saveRectangles();
+        });
+
+        // Ajouter cet écouteur pour gérer la combinaison Shift + X
+        document.addEventListener('keydown', function(e) {
+            if (e.shiftKey && (e.key === 'X' || e.key === 'x')) {  // Vérifier les deux cas
+                e.preventDefault(); // Empêcher le comportement par défaut
+                if (selectedRectangles.length === 2) {
+                    if (!connectionExists(selectedRectangles[0], selectedRectangles[1])) {
+                        const connector = createConnector(selectedRectangles[0], selectedRectangles[1]);
+                        updateCalculations();
+                        saveRectangles();
+                    }
+                } else {
+                    alert('Veuillez sélectionner exactement deux rectangles à connecter.');
+                }
+            }
+        });
+
+        // Ajouter une fonction pour supprimer une connexion
+        function deleteConnector(connector) {
+            if (connector && connector.parentNode === viewport) {
+                viewport.removeChild(connector);
+                connectors = connectors.filter(c => c !== connector);
+                updateCalculations();
+                saveRectangles();
+            }
+        }
+
+        // Ajouter cette fonction pour vérifier si une connexion existe déjà
+        function connectionExists(rect1, rect2) {
+            return connectors.some(connector => 
+                (connector.rect1 === rect1 && connector.rect2 === rect2) ||
+                (connector.rect1 === rect2 && connector.rect2 === rect1)
+            );
+        }
+
+        // Ajouter cette fonction pour l'export SVG
+        function exportAsSVG() {
+            // Trouver les limites du contenu
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            
+            rectangles.forEach(rect => {
+                const left = parseInt(rect.style.left);
+                const top = parseInt(rect.style.top);
+                const right = left + rect.offsetWidth;
+                const bottom = top + rect.offsetHeight;
+                
+                minX = Math.min(minX, left);
+                minY = Math.min(minY, top);
+                maxX = Math.max(maxX, right);
+                maxY = Math.max(maxY, bottom);
+            });
+            
+            // Ajouter une marge
+            const margin = 50;
+            minX -= margin;
+            minY -= margin;
+            maxX += margin;
+            maxY += margin;
+            
+            const width = maxX - minX;
+            const height = maxY - minY;
+            
+            // Créer le SVG
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute("width", width);
+            svg.setAttribute("height", height);
+            svg.setAttribute("viewBox", `${minX} ${minY} ${width} ${height}`);
+            
+            // Ajouter un fond blanc
+            const background = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            background.setAttribute("x", minX);
+            background.setAttribute("y", minY);
+            background.setAttribute("width", width);
+            background.setAttribute("height", height);
+            background.setAttribute("fill", "white");
+            svg.appendChild(background);
+            
+            // Ajouter les rectangles
+            rectangles.forEach(rectangle => {
+                const svgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                svgRect.setAttribute("x", rect.style.left);
+                svgRect.setAttribute("y", rect.style.top);
+                svgRect.setAttribute("width", rect.offsetWidth);
+                svgRect.setAttribute("height", rect.offsetHeight);
+                svgRect.setAttribute("fill", rect.style.backgroundColor || "rgba(3, 120, 230, 0.425)");
+                svgRect.setAttribute("stroke", "black");
+                svgRect.setAttribute("stroke-width", "2");
+                svg.appendChild(svgRect);
+                
+                // Ajouter le texte
+                if (rectangle.textContent) {
+                    const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                    text.setAttribute("x", parseInt(rect.style.left) + rect.offsetWidth / 2);
+                    text.setAttribute("y", parseInt(rect.style.top) + rect.offsetHeight / 2);
+                    text.setAttribute("text-anchor", "middle");
+                    text.setAttribute("dominant-baseline", "middle");
+                    text.setAttribute("fill", "white");
+                    text.setAttribute("font-family", "Arial, sans-serif");
+                    text.setAttribute("font-size", "12px");
+                    text.textContent = rectangle.textContent;
+                    svg.appendChild(text);
+                }
+            });
+            
+            // Ajouter les connecteurs
+            connectors.forEach(connector => {
+                const path = connector.querySelector('path');
+                const svgPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                svgPath.setAttribute("d", path.getAttribute("d"));
+                svgPath.setAttribute("stroke", "#666");
+                svgPath.setAttribute("stroke-width", "4");
+                svgPath.setAttribute("stroke-dasharray", "10,10");
+                svgPath.setAttribute("fill", "none");
+                svg.appendChild(svgPath);
+            });
+            
+            // Convertir en chaîne SVG
+            const serializer = new XMLSerializer();
+            const svgString = serializer.serializeToString(svg);
+            
+            // Créer le blob et télécharger
+            const blob = new Blob([svgString], {type: 'image/svg+xml'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'export.svg';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Ajouter l'écouteur pour le bouton d'export
+        document.getElementById('export-button').addEventListener('click', function() {
+            exportAsSVG();
+            hideContextMenu();
+        });
+
+        // Ajout de l'écouteur d'événements pour le drag and drop
+        document.addEventListener('dragover', function(e) {
+            e.preventDefault(); // Empêche le comportement par défaut pour permettre le drop
+        });
+
+        document.addEventListener('drop', function(e) {
+            e.preventDefault();
+            const file = e.dataTransfer.files[0];
+            if (file && file.type === 'application/json') {
+                const reader = new FileReader();
+                reader.onload = event => {
+                    isLoading = true;
+                    console.log('Starting drop operation');
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        
+                        const dropX = (e.clientX - translateX) / scale;
+                        const dropY = (e.clientY - translateY) / scale;
+                        
+                        // Calculer le centre du groupe de rectangles d'origine
+                        const minX = Math.min(...data.rectangles.map(r => r.left));
+                        const maxX = Math.max(...data.rectangles.map(r => r.left + r.width));
+                        const minY = Math.min(...data.rectangles.map(r => r.top));
+                        const maxY = Math.max(...data.rectangles.map(r => r.top + r.height));
+                        
+                        const groupWidth = maxX - minX;
+                        const groupHeight = maxY - minY;
+                        const groupCenterX = minX + groupWidth / 2;
+                        const groupCenterY = minY + groupHeight / 2;
+                        
+                        const newRectangles = new Map();
+                        const startIndex = rectangles.length;
+                        
+                        // Créer les nouveaux rectangles
+                        data.rectangles.forEach((rect, index) => {
+                            const relativeX = rect.left - groupCenterX;
+                            const relativeY = rect.top - groupCenterY;
+                            
+                            const newX = dropX + relativeX;
+                            const newY = dropY + relativeY;
+                            
+                            let newRect;
+                            if (rect.type === 'calc') {
+                                console.log('Création d\'un rectangle de calcul par drop');
+                                newRect = createCalcRectangle(newX, newY);
+                            } else {
+                                console.log('Création d\'un rectangle normal par drop');
+                                newRect = createRectangle(newX, newY, rect.width, rect.height);
+                            }
+                            
+                            newRect.textContent = rect.label;
+                            newRect.style.backgroundColor = rect.color;
+                            newRect.dataset.type = rect.type;
+                            
+                            console.log('Nouveau rectangle créé par drop:', {
+                                type: newRect.dataset.type,
+                                text: newRect.textContent,
+                                position: { x: newX, y: newY }
+                            });
+                            
+                            newRectangles.set(index, newRect);
+                        });
+                        
+                        // Restaurer les connexions du fichier déposé
+                        if (data.connections) {
+                            data.connections.forEach(conn => {
+                                const rect1 = newRectangles.get(conn.fromIndex);
+                                const rect2 = newRectangles.get(conn.toIndex);
+                                if (rect1 && rect2) {
+                                    createConnector(rect1, rect2);
+                                }
+                            });
+                        }
+                        
+                        // Sauvegarder dans le localStorage
+                        saveRectangles();
+                        
+                        updateZIndices();
+                        updateConnectors();
+                        
+                    } catch (error) {
+                        console.error('Error during drop:', error);
+                    } finally {
+                        console.log('Finished drop operation');
+                        isLoading = false;
+                    }
+                };
+                reader.readAsText(file);
+            } else {
+                alert('Veuillez déposer un fichier JSON valide.');
+            }
+        });
+
+        // Ajouter la fonction pour afficher/masquer le menu
+        function toggleMenu() {
+            if (contextMenu.style.display === 'block') {
+                hideContextMenu();
+            } else {
+                contextMenu.style.display = 'block';
+                contextMenu.style.left = mouseX + 'px';
+                contextMenu.style.top = mouseY + 'px';
+            }
+        }
+    </script>
+</body>
+</html>
